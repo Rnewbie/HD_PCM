@@ -1,17 +1,9 @@
 
-library(protr)
+
 library(readxl)
-library(caret)
-library(Biostrings)
 library(RWeka)
-library(dplyr)
-library(e1071)
-library(randomForest)
-library(nnet)
 library(Rcpi)
-
-
-library(readxl)
+library(caret)
 data <- read_excel("data.xlsx")
 Activity <- data$Activity
 compound <- data[, 3:309]
@@ -58,6 +50,7 @@ compoundNamecross <- rep(dfcompound, each = 26)
 proteinNamecross <- rep(dfprotein, times = 26)
 label <- paste(compoundNamecross, proteinNamecross, sep="_")
 colnames(CxP) <- label
+CxP <- as.data.frame(CxP)
 
 
 PxP <- getCPI(protein, protein, type = "tensorprod")
@@ -71,6 +64,7 @@ transposedIndexed_protein <- t(protein_selfcross)
 index1 <- which(duplicated(transposedIndexed_protein))
 removed_duplicated_protein <- transposedIndexed_protein[-index1, ]
 PxP <- t(removed_duplicated_protein)
+PxP <- as.data.frame(PxP)
 
 CxC <- getCPI(compound, compound, type = "tensorprod")
 compoundName2 <- rep(dfcompound, times = 33)
@@ -84,11 +78,14 @@ index4 <- which(duplicated(transposedIndexed_compound))
 removed_compound <- transposedIndexed_compound[-index4, ]
 compound_finalcrossterms <- t(removed_compound)
 CxC <- compound_finalcrossterms
+CxC <- as.data.frame(CxC)
 
 #compound
 C <- compound
+C <- as.data.frame(C)
 #protein
 P <- protein
+P <- as.data.frame(P)
 #CxP
 #CxC
 #PxP
@@ -128,25 +125,45 @@ C_P_CxP_PxP <- cbind(Activity, C_P_CxP_PxP_data_block_scale)
 C_P_CxC_PxP <- cbind(Activity, C_P_CxC_PxP_data_block_scale)
 C_P_CxP_CxC_PxP <- cbind(Activity, C_P_CxP_CxC_PxP_data_block_scale)
 
+### Preparing input for build model
 
-#### J48 testing
+input <- list(C = C,
+              P = P, 
+              CxP = CxP,
+              CxC = CxC,
+              PxP = PxP,
+              C_P = C_P,
+              C_P_CxP = C_P_CxP,
+              C_P_CxC = C_P_CxC,
+              C_P_PxP = C_P_PxP,
+              C_P_CxP_CxC = C_P_CxP_CxC,
+              C_P_CxP_PxP = C_P_CxP_PxP,
+              C_P_CxC_PxP = C_P_CxC_PxP,
+              C_P_CxP_CxC_PxP = C_P_CxP_CxC_PxP)
+
+
+#### J48 training
 J48_training <- function(x) {
-  high <- subset(x, affinity == "High")
-  low <- subset(x, affinity =="Low")
+  library(parallel)
+  library(doSNOW)
+  cl <- makeCluster(8)
+  registerDoSNOW(cl)
   results <- list(100)
-  for (i in 1:100) {
-    train_high <- sample_n(high, size = 54)
-    test_high <- sample_n(high, size = 14)
-    train_low <- sample_n(low, size = 51)
-    test_low <- sample_n(low, size = 13)
-    train <- rbind(train_high, train_low)
-    test <- rbind(test_high, test_low)
-    model_train <- J48(affinity~., data = train)
+  
+  results <- foreach(i = 1:100) %dopar% {
+    in_train <- caret::createDataPartition(x$Activity, p = 0.8, list = FALSE)
+    train <- x[in_train, ]
+    test <- x[-in_train, ]
+    rm(in_train)
+    rm(test)
+    model_train <- RWeka::J48(Activity~., data = train)
     summary <- summary(model_train)
+    rm(model_train)
     confusionmatrix <- summary$confusionMatrix
     results[[i]] <- as.numeric(confusionmatrix)
   }
   return(results)
+  stopCluster(cl)
 }
 
 ### mean and SD value
@@ -182,52 +199,37 @@ J48_train <- function(x) {
   results_SENS <- mean_and_sd(SENS)
   results_SPEC <- mean_and_sd(SPEC)
   results_MCC <- mean_and_sd(MCC)
-  return(data.frame(c(results_ACC, results_SENS, results_SPEC, results_MCC)))
+  results_all <- (data.frame(c(results_ACC, results_SENS, results_SPEC, results_MCC)))
+  rownames(results_all) <- c("ACC_Mean", "ACC_SD", "Sens_Mean",
+                             "Sens_SD", "Spec_Mean", "Spec_SD",
+                             "MCC_Mean", "MCC_SD")
+  return(results_all)
 }
 
-#protein_A_data
-#protein_B_data
-#cross_terms_data
-#AxA_data
-#BxB_data
-#A_B_data 
-#A_B_AxB_data 
-#A_B_AxA_data
-#A_B_BxB_data
-#A_B_AxB_AxA_data
-#A_B_AxB_BxB_data 
-#A_B_AxA_BxB_data
-#A_B_AxB_AxA_BxB_data
+results_HD_PCM_Training <- lapply(input, function(x) {
+  results <- J48_train(x)
+  return(results)
+})
+print(results_HD_PCM_Training)
 
-#### results for training J48
-protein_A_training <- J48_train(protein_A_data)
-protein_B_training <- J48_train(protein_B_data)
-protein_cross_terms_training <- J48_train(cross_terms_data)
-protein_AxA_training <- J48_train(AxA_data)
-protein_BxB_training <- J48_train(BxB_data)
-protein_A_B_training <- J48_train(A_B_data)
-protein_A_B_AxB_training <- J48_train(A_B_AxB_data)
-protein_A_B_AxA_training <- J48_train(A_B_AxA_data)
-protein_A_B_BxB_training <- J48_train(A_B_BxB_data)
-protein_A_B_AxB_AxA_training <- J48_train(A_B_AxB_AxA_data)
-protein_A_B_AxB_BxB_training <- J48_train(A_B_AxB_BxB_data)
-protein_A_B_AxA_BxB_training <- J48_train(A_B_AxA_BxB_data)
-protein_A_B_AxB_AxA_BxB_training <- J48_train(A_B_AxB_AxA_BxB_data)
 
 ### function for 10 fold cross validation
 
 J48_10fold <- function(x) {
-  high <- subset(x, affinity == "High")
-  low <- subset(x, affinity =="Low")
+  library(parallel)
+  library(doSNOW)
+  cl <- makeCluster(8)
+  registerDoSNOW(cl)
   results <- list(100)
-  for (i in 1:100) {
-    train_high <- sample_n(high, size = 54)
-    test_high <- sample_n(high, size = 14)
-    train_low <- sample_n(low, size = 51)
-    test_low <- sample_n(low, size = 13)
-    train <- rbind(train_high, train_low)
-    test <- rbind(test_high, test_low)
-    model_train <- J48(affinity~., data = train)
+  
+  results <- foreach(i = 1:100) %dopar% {
+    in_train <- caret::createDataPartition(x$Activity, p = 0.8, list = FALSE)
+    train <- x[in_train, ]
+    test <- x[-in_train, ]
+    rm(in_train)
+    rm(test)
+    
+    model_train <- J48(Activity~., data = train)
     eval_j48 <- evaluate_Weka_classifier(model_train, numFolds = 10, complexity = FALSE, seed = 1, class = TRUE)
     confusionmatrix <- eval_j48$confusionMatrix
     results[[i]] <- as.numeric(confusionmatrix)
@@ -261,40 +263,37 @@ J48_cross_validation <- function(x) {
   results_SENS <- mean_and_sd(SENS)
   results_SPEC <- mean_and_sd(SPEC)
   results_MCC <- mean_and_sd(MCC)
-  return(data.frame(c(results_ACC, results_SENS, results_SPEC, results_MCC)))
+  results_all <- (data.frame(c(results_ACC, results_SENS, results_SPEC, results_MCC)))
+  rownames(results_all) <- c("ACC_Mean", "ACC_SD", "Sens_Mean",
+                             "Sens_SD", "Spec_Mean", "Spec_SD",
+                             "MCC_Mean", "MCC_SD")
+  return(results_all)
 }
 
 #### results for 10 fold cross validation
 
-protein_A_cross_validation <- J48_cross_validation(protein_A_data)
-protein_B_cross_validation <- J48_cross_validation(protein_B_data)
-protein_crossterms_cross_validation <- J48_cross_validation(cross_terms_data)
-protein_AxA_cross_validation <- J48_cross_validation(AxA_data)
-protein_BxB_cross_validation <- J48_cross_validation(BxB_data)
-protein_A_B_cross_validation <- J48_cross_validation(A_B_data)
-protein_A_B_AxB_cross_validation <- J48_cross_validation(A_B_AxB_data)
-protein_A_B_AxA_cross_validation <- J48_cross_validation(A_B_AxA_data)
-protein_A_B_BxB_cross_validation <- J48_cross_validation(A_B_BxB_data)
-protein_A_B_AxB_AxA_cross_validation <- J48_cross_validation(A_B_AxB_AxA_data)
-protein_A_B_AxB_BxB_cross_validation <- J48_cross_validation(A_B_AxB_BxB_data)
-protein_A_B_AxA_BxB_cross_validation <- J48_cross_validation(A_B_AxA_BxB_data)
-protein_A_B_AxB_AxA_BxB_cross_validation <- J48_cross_validation(A_B_AxB_AxA_BxB_data)
+results_HD_PCM_10_fold <- lapply(input, function(x) {
+  results <- J48_cross_validation(x)
+  return(results)
+})
+print(results_HD_PCM_10_fold)
 
 
 
 #### J48 modeling testing results
 J48_testing <- function(x) {
-  high <- subset(x, affinity == "High")
-  low <- subset(x, affinity =="Low")
+  library(parallel)
+  library(doSNOW)
+  cl <- makeCluster(8)
+  registerDoSNOW(cl)
   results <- list(100)
-  for (i in 1:100) {
-    train_high <- sample_n(high, size = 54)
-    test_high <- sample_n(high, size = 14)
-    train_low <- sample_n(low, size = 51)
-    test_low <- sample_n(low, size = 13)
-    train <- rbind(train_high, train_low)
-    test <- rbind(test_high, test_low)
-    model_train <- J48(affinity~., data = train)
+  
+  results <- foreach(i = 1:100) %dopar% {
+    in_train <- caret::createDataPartition(x$Activity, p = 0.8, list = FALSE)
+    train <- x[in_train, ]
+    test <- x[-in_train, ]
+    rm(in_train)
+    model_train <- J48(Activity~., data = train)
     eval_external <- evaluate_Weka_classifier(model_train, newdata = test, numFolds = 0, complexity = FALSE, seed = 1, class = TRUE)
     confusionmatrix <- eval_external$confusionMatrix
     results[[i]] <- as.numeric(confusionmatrix)
@@ -328,22 +327,17 @@ J48_external <- function(x) {
   results_SENS <- mean_and_sd(SENS)
   results_SPEC <- mean_and_sd(SPEC)
   results_MCC <- mean_and_sd(MCC)
-  return(data.frame(c(results_ACC, results_SENS, results_SPEC, results_MCC)))
+  results_all <- (data.frame(c(results_ACC, results_SENS, results_SPEC, results_MCC)))
+  rownames(results_all) <- c("ACC_Mean", "ACC_SD", "Sens_Mean",
+                             "Sens_SD", "Spec_Mean", "Spec_SD",
+                             "MCC_Mean", "MCC_SD")
+  return(results_all)
 }
 
 ### results for testing set
 
-
-protein_A_testing <- J48_external(protein_A_data)
-protein_B_testing <- J48_external(protein_B_data)
-protein_crossterms_testing <- J48_external(cross_terms_data)
-protein_AxA_testing <- J48_external(AxA_data)
-protein_BxB_testing <- J48_external(BxB_data)
-protein_A_B_testing <- J48_external(A_B_data)
-protein_A_B_AxB_testing <- J48_external(A_B_AxB_data)
-protein_A_B_AxA_testing <- J48_external(A_B_AxA_data)
-protein_A_B_BxB_testing <- J48_external(A_B_BxB_data)
-protein_A_B_AxB_AxA_testing <- J48_external(A_B_AxB_AxA_data)
-protein_A_B_AxB_BxB_testing <- J48_external(A_B_AxB_BxB_data)
-protein_A_B_AxA_BxB_testing <- J48_external(A_B_AxA_BxB_data)
-protein_A_B_AxB_AxA_BxB_testing <- J48_external(A_B_AxB_AxA_BxB_data)
+results_HD_PCM_testing <- lapply(input, function(x) {
+  results <- J48_external(x)
+  return(results)
+})
+print(results_HD_PCM_testing)
